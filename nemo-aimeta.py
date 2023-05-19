@@ -81,13 +81,11 @@ class AIinfoPropertyPage(GObject.GObject, Nemo.PropertyPageProvider, Nemo.NameAn
 
         parameters = parameters.replace('\\n', '\n') #Helping improperly embedded prompts
 
-        if parameters.count('\n'): #If has prompt
+        if parameters.count('\n'):
             prompt_str, setting_str = parameters.rsplit('\n', 1)
-            prompt_regex = re.match("^(.*?)\n(?:Negative prompt: )?(.*?)$",
-                                    prompt_str+'\n',
-                                    flags=re.MULTILINE | re.IGNORECASE | re.DOTALL)
-            info["Prompt"], info["Negative prompt"] = prompt_regex.groups()
-        else: #If only settings
+            #NICE Placing two empty values at end of list to fix "too few values" error and *_ to fix "too many values"
+            info['Prompt'], info['Negative prompt'], *_ = [ x.rstrip() for x in prompt_str.split('Negative prompt: ') + ["", ""] ]
+        else: #If no Prompt info in parameters
             setting_str = parameters
 
         settings_regex = re.findall("(.*?): (.*?), ", setting_str + ", ")
