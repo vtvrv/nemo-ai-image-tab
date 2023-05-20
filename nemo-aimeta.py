@@ -1,7 +1,7 @@
 #!/usr/bin/python
 # coding: utf-8
 
-import locale, gettext, os, re
+import locale, gettext, os
 
 try:
     from urllib import unquote
@@ -9,10 +9,40 @@ except ImportError:
     from urllib.parse import unquote
 
 import gi
-gi.require_version('Gtk', '3.0')
-gi.require_version('Nemo', '3.0')
+gi.require_versions({'Gtk': '3.0', 'Nemo': '3.0'})
 from gi.repository import GObject, Gtk, Nemo
+
 from PIL import Image
+
+SUPPORTED_EXTENSIONS = [".jpg", ".jpeg", ".png", ".webp"] #ensure all lowercase
+
+def getinfo(filename):
+    img = Image.open(filename)
+    extension = os.path.splitext(filename)[-1].lower()
+    if extension == '.png':
+        parameters = img.info['parameters']
+    elif extension in [".jpg", ".jpeg", ".webp"]:
+        parameters = img._getexif()[37510]  # 37510 is ExifID for "UserComment" https://exiftool.org/TagNames/EXIF.html
+        parameters = parameters.replace(b'\x00', b'').decode("utf-8")
+        if parameters.startswith("UNICODE"):
+            parameters = parameters[7:]
+    else:
+        return {}
+
+    parameters = parameters.replace('\\n', '\n')  # Help with improperly embedded prompts
+    lines = parameters.rsplit('\n', 1)
+
+    #Assume last line lines[-1] is string of settings
+    #lines[-1] looks like this "Step: 4, Model: sd1.5, CFG scale: 5"
+    info = {k: v for k, v in (x.split(": ") for x in lines[-1].split(", "))}
+
+    if len(lines) > 1:  # contains positive or negative prompts
+        prompts = [x.rstrip('\n') for x in lines[0].split("Negative prompt: ", 1)]  # [positive, negative]
+        info['Prompt'] = prompts[0]
+        if len(prompts) > 1:
+            info['Negative prompt'] = prompts[1]
+
+    return info
 
 GUI = """
 <interface>
@@ -61,42 +91,19 @@ class AIinfoPropertyPage(GObject.GObject, Nemo.PropertyPageProvider, Nemo.NameAn
         except:
             pass
 
-        if not os.path.isfile(filename):
+        if os.path.splitext(filename)[-1].lower() not in SUPPORTED_EXTENSIONS:
             return
 
-        img = Image.open(filename)
-
-        extension = os.path.splitext(filename)[-1].lower()
-        if extension == '.png':
-            parameters = img.info['parameters']
-        elif extension in [".jpg", ".jpeg", ".webp"]:
-            parameters = img._getexif()[37510] #37510 is ExifID for "UserComment" https://exiftool.org/TagNames/EXIF.html
-            parameters = parameters.replace(b'\x00', b'').decode("utf-8")
-            if parameters.startswith("UNICODE"):
-                parameters = parameters[7:]
-        else:
+        info = getinfo(filename)
+        if not info:
             return
-
-        info = {}
-
-        parameters = parameters.replace('\\n', '\n') #Helping improperly embedded prompts
-
-        if parameters.count('\n'):
-            prompt_str, setting_str = parameters.rsplit('\n', 1)
-            #NICE Placing two empty values at end of list to fix "too few values" error and *_ to fix "too many values"
-            info['Prompt'], info['Negative prompt'], *_ = [ x.rstrip() for x in prompt_str.split('Negative prompt: ') + ["", ""] ]
-        else: #If no Prompt info in parameters
-            setting_str = parameters
-
-        settings_regex = re.findall("(.*?): (.*?), ", setting_str + ", ")
-        info = info | dict(settings_regex)
 
         locale.setlocale(locale.LC_ALL, '')
         gettext.bindtextdomain("nemo-extensions")
         gettext.textdomain("nemo-extensions")
         _ = gettext.gettext
 
-        self.property_label = Gtk.Label(_('AI Metadata'))
+        self.property_label = Gtk.Label(('AI Metadata'))
         self.property_label.show()
 
         self.builder = Gtk.Builder()
@@ -107,23 +114,22 @@ class AIinfoPropertyPage(GObject.GObject, Nemo.PropertyPageProvider, Nemo.NameAn
         self.grid = self.builder.get_object("grid")
 
         for i, (key,val) in enumerate(info.items()):
-            if val:
-                label = Gtk.Label()
-                label.set_markup("<b>" + key + ":</b>")
-                label.set_justify(Gtk.Justification.LEFT)
-                label.set_halign(Gtk.Align.START)
-                label.show()
-                self.grid.attach(label, 0, i, 1, 1)
-                label = Gtk.Label()
-                label.set_text(info[key])
-                label.set_justify(Gtk.Justification.LEFT)
-                label.set_halign(Gtk.Align.START)
-                label.set_selectable(True)
-                label.set_line_wrap(True)
-                label.set_line_wrap_mode(1)  # PANGO_WRAP_WORD_CHAR
-                # label.set_max_width_chars(160)
-                label.show()
-                self.grid.attach(label, 1, i, 1, 1)
+            label = Gtk.Label()
+            label.set_markup("<b>" + key + ":</b>")
+            label.set_justify(Gtk.Justification.LEFT)
+            label.set_halign(Gtk.Align.START)
+            label.show()
+            self.grid.attach(label, 0, i, 1, 1)
+            label = Gtk.Label()
+            label.set_text(info[key])
+            label.set_justify(Gtk.Justification.LEFT)
+            label.set_halign(Gtk.Align.START)
+            label.set_selectable(True)
+            label.set_line_wrap(True)
+            label.set_line_wrap_mode(1)  # PANGO_WRAP_WORD_CHAR
+            # label.set_max_width_chars(160)
+            label.show()
+            self.grid.attach(label, 1, i, 1, 1)
 
         return Nemo.PropertyPage(name="NemoPython::AIinfo", label=self.property_label, page=self.mainWindow),
 
